@@ -247,6 +247,10 @@ function cpmSvg(solved, opt = {}) {
   const minY = Math.min(...points.map((p) => p[1])) - 70;
   const maxX = Math.max(...points.map((p) => p[0])) + 78;
   const maxY = Math.max(...points.map((p) => p[1])) + 64;
+  const vbW = maxX - minX;
+  const vbH = maxY - minY;
+  const pixel = Number(opt.pixel) || 0;
+  const sized = pixel > 0 ? ` style="width:${Math.round(vbW * pixel)}px" data-base="${Math.round(vbW)}"` : "";
   const nodes = solved.ids
     .map((n) => {
       const p = pos[n];
@@ -263,7 +267,7 @@ function cpmSvg(solved, opt = {}) {
       </g>`;
     })
     .join("");
-  return `<svg class="cpm-svg" viewBox="${minX} ${minY} ${maxX - minX} ${maxY - minY}" role="img" aria-label="CPM 네트워크">
+  return `<svg class="cpm-svg${pixel > 0 ? " is-pixel" : ""}"${sized} viewBox="${minX} ${minY} ${vbW} ${vbH}" role="img" aria-label="CPM 네트워크">
     <defs>
       <marker id="${mark}b" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
         <path d="M0,0 L8,4 L0,8" fill="#6b7a63"/>
@@ -1189,7 +1193,7 @@ function rollNetwork(seed) {
   };
 }
 
-function gradeDiagram(jobs, arrows) {
+function gradeDiagram(jobs, arrows, options) {
   const checks = [];
   const lines = [];
   const uniq = (items) => [...new Set(items)];
@@ -1252,13 +1256,20 @@ function gradeDiagram(jobs, arrows) {
   arrows.forEach((a) => {
     (incoming[a.to] ||= []).push(a);
   });
-  Object.keys(incoming).forEach((node) => {
-    const reals = incoming[node].filter((a) => !a.dummy);
-    if (reals.length < 2) return;
-    dummyProblems.push(
-      `결합점 ${node}에 작업 화살 ${reals.map((a) => a.name).join(", ")}가 함께 들어갑니다. 작업 화살은 한 점에 하나만 두고, 나머지는 새 결합점에서 끝낸 뒤 점선 더미로 이으세요.`
-    );
-  });
+  if (!(options && options.allowSharedHeads)) {
+    Object.keys(incoming).forEach((node) => {
+      const works = incoming[node].filter((a) => expected[a.name]);
+      if (works.length < 2) return;
+      const names = works.map((a) => a.name).join(", ");
+      const dashed = works.filter((a) => a.dummy).map((a) => a.name);
+      const dashedNote = dashed.length
+        ? ` ${dashed.join(", ")}는 점선이라도 작업 이름이 있으면 작업 화살입니다.`
+        : "";
+      dummyProblems.push(
+        `결합점 ${node}에 작업 ${names}가 함께 들어갑니다.${dashedNote} 작업 화살은 한 결합점에 하나만 두고, 나머지 작업은 자기 결합점에서 끝낸 뒤 이름 없는 순서만 점선으로 이으세요.`
+      );
+    });
+  }
 
   note(
     "작업 화살표",
@@ -1279,7 +1290,9 @@ function gradeDiagram(jobs, arrows) {
     dummyProblems.length === 0,
     dummyProblems.length
       ? uniq(dummyProblems).join(" ")
-      : "작업 화살은 한 결합점에 하나만 들어갑니다. 점선에 고른 작업은 그 이름과 일수로 인정되고, 순서만은 기간 0입니다."
+      : options && options.allowSharedHeads
+        ? "순서만 잇는 점선은 기간 0입니다. 점선에 작업 이름을 고르면 그 작업으로 인정되고, 목록에 없는 일은 기다리게 하지 않습니다."
+        : "작업 화살은 한 결합점에 하나만 들어갑니다. 점선에 고른 작업은 그 이름과 일수로 인정되고, 순서만은 기간 0입니다."
   );
   lines.push(...jobProblems, ...pairProblems, ...dummyProblems);
 
@@ -1355,7 +1368,7 @@ function gradeDiagram(jobs, arrows) {
     }
     if (extra.length) {
       predProblems.push(
-        `${j.name}는 ${extra.join(", ")}를 기다리지 않아도 됩니다. 결합점을 나누고, 순서만 이을 때는 더미를 쓰세요.`
+        `${j.name}는 ${extra.join(", ")}를 기다리지 않아도 됩니다. 그쪽으로 이어 둔 화살이나 순서만 점선을 지우거나, 결합점을 나눠 주세요.`
       );
     }
   });

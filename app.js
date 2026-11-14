@@ -285,6 +285,7 @@ const drawUi = {
   checks: [],
   ok: false,
   showAnswer: false,
+  answerZoom: 1,
   tableMsg: "",
   tableHint: false,
   panel: "table",
@@ -1188,6 +1189,7 @@ function resetDraw(keepChart) {
   drawUi.checks = [];
   drawUi.ok = false;
   drawUi.showAnswer = false;
+  drawUi.answerZoom = 1;
   drawUi.tableMsg = "";
   drawUi.tableHint = false;
   drawUi.panel = "table";
@@ -1308,9 +1310,7 @@ function drawView(embedded) {
         <button type="button" class="btn ghost" id="draw-cancel">취소</button>
       </div>`
     : "";
-  const grade = embedded
-    ? ""
-    : drawUi.checks.length
+  const grade = drawUi.checks.length
       ? `<div class="grade-row"><div><ul class="grade-list${drawUi.ok ? " ok" : ""}">${drawUi.checks
           .map(
             (item) =>
@@ -1360,14 +1360,33 @@ function drawView(embedded) {
         <p id="draw-table-msg" class="lead">${esc(drawUi.tableMsg)}</p>`;
       })()
     : "";
+  const answerCaption =
+    "작업 화살은 한 결합점에 하나만 들어갑니다. 순서를 더 이을 때는 점선 더미를 씁니다. 모양은 달라도, 바로 앞 작업이 목록과 같으면 맞습니다.";
   const answer = drawUi.showAnswer
-    ? `<div class="net-panel">${cpmSvg(solveCpm(answerActivities(drawUi.problem)), {
-        revealTE: [],
-        revealTL: [],
-        showCrit: false,
-        caption:
-          "작업 화살은 한 결합점에 하나만 들어갑니다. 순서를 더 이을 때는 점선 더미를 씁니다. 모양은 달라도, 바로 앞 작업이 목록과 같으면 맞습니다.",
-      })}</div>`
+    ? embedded
+      ? `<div class="answer-zoom-box">
+          <div class="exam-zoom-bar">
+            <button type="button" class="btn ghost" id="answer-zoom-out">축소</button>
+            <button type="button" class="btn ghost" id="answer-zoom-label">${Math.round((drawUi.answerZoom || 1) * 100)}%</button>
+            <button type="button" class="btn ghost" id="answer-zoom-in">확대</button>
+          </div>
+          <div class="answer-zoom" id="answer-zoom" tabindex="0" aria-label="정답 공정표. 버튼이나 휠, 두 손가락으로 확대합니다.">
+            ${cpmSvg(solveCpm(answerActivities(drawUi.problem)), {
+              revealTE: [],
+              revealTL: [],
+              showCrit: false,
+              pixel: drawUi.answerZoom || 1,
+              caption: "",
+            })}
+          </div>
+          <p class="caption">${answerCaption}</p>
+        </div>`
+      : `<div class="net-panel">${cpmSvg(solveCpm(answerActivities(drawUi.problem)), {
+          revealTE: [],
+          revealTL: [],
+          showCrit: false,
+          caption: answerCaption,
+        })}</div>`
     : "";
   const intro = embedded
     ? ""
@@ -1395,14 +1414,14 @@ function drawView(embedded) {
         ${drawBoard()}
         ${picker}
         <p style="display:flex;gap:10px;flex-wrap:wrap">
-          ${embedded ? "" : `<button type="button" class="btn" id="draw-grade">공정표 채점</button>`}
+          <button type="button" class="btn" id="draw-grade">공정표 채점</button>
           <button type="button" class="btn ghost" id="draw-answer">${drawUi.showAnswer ? "정답 숨기기" : "정답 공정표"}</button>
           <button type="button" class="btn ghost" id="draw-clear">판 비우기</button>
           ${embedded ? "" : `<button type="button" class="btn ghost" id="draw-new">다른 문제</button>`}
         </p>
         ${grade}
         ${table}
-        ${answer}
+        ${embedded ? "" : answer}
       </div>
       <aside class="draw-jobs">
         <h3>해야 할 일</h3>
@@ -1417,6 +1436,7 @@ function drawView(embedded) {
         </ul>
       </aside>
     </div>
+    ${embedded ? answer : ""}
   `;
 }
 
@@ -1427,6 +1447,10 @@ function paintDraw() {
   const values = [...document.querySelectorAll("#draw-sheet input")].map((i) => i.value);
   if (values.length) drawUi.answers = values;
   const y = window.scrollY;
+  const zoomPane = document.getElementById("exam-zoom");
+  const zoomScroll = zoomPane ? { top: zoomPane.scrollTop, left: zoomPane.scrollLeft } : null;
+  const answerPane = document.getElementById("answer-zoom");
+  const answerScroll = answerPane ? { top: answerPane.scrollTop, left: answerPane.scrollLeft } : null;
   if (onDraw) app.innerHTML = drawView();
   else {
     const id = decodeURIComponent(location.hash.split("/")[3] || "");
@@ -1437,11 +1461,24 @@ function paintDraw() {
   document.querySelectorAll("#draw-sheet input").forEach((inp, i) => {
     inp.value = (drawUi.answers && drawUi.answers[i]) || "";
   });
-  if (onBank) window.scrollTo(0, y);
+  if (onBank) {
+    const zoom = document.getElementById("exam-zoom");
+    if (zoom && zoomScroll) {
+      zoom.scrollTop = zoomScroll.top;
+      zoom.scrollLeft = zoomScroll.left;
+    }
+    const answerView = document.getElementById("answer-zoom");
+    if (answerView && answerScroll) {
+      answerView.scrollTop = answerScroll.top;
+      answerView.scrollLeft = answerScroll.left;
+    }
+    window.scrollTo(0, y);
+  }
 }
 
 function bindDraw() {
   bindResultViews(paintDraw);
+  bindAnswerZoom();
   const svg = document.getElementById("draw-board");
   if (!svg || !drawUi.problem) return;
   const pointOf = (event) => {
@@ -1494,22 +1531,29 @@ function bindDraw() {
     });
   });
   document.getElementById("draw-grade")?.addEventListener("click", () => {
-    const graded = gradeDiagram(drawUi.problem.jobs, diagramArrows());
+    const onBank = location.hash.startsWith("#/solve/bank/");
+    const graded = gradeDiagram(
+      drawUi.problem.jobs,
+      diagramArrows(),
+      onBank ? { allowSharedHeads: true } : undefined
+    );
     drawUi.ok = graded.ok;
     drawUi.lines = graded.lines;
     drawUi.checks = graded.checks || [];
     drawUi.tableMsg = "";
-    if (graded.ok) {
-      try {
-        rememberGantt("draw", solveCpm(diagramArrows()), drawUi.problem.title);
-      } catch (e) {
-        ganttStore.draw = null;
-      }
-    } else ganttStore.draw = null;
-    if (drawUi.bankFor) {
-      const saved = recordStudy(drawUi.bankFor, graded.ok);
-      if (!saved) drawUi.lines.push("로그인하면 이 채점이 맞춘 문제와 오답노트에 남습니다.");
+    if (graded.ok && onBank) {
+      drawUi.lines = ["다섯 기준이 모두 맞습니다. 작업 화살과 더미, 바로 앞 작업이 목록과 같습니다."];
     }
+    if (!onBank) {
+      if (graded.ok) {
+        try {
+          rememberGantt("draw", solveCpm(diagramArrows()), drawUi.problem.title);
+        } catch (e) {
+          ganttStore.draw = null;
+        }
+      } else ganttStore.draw = null;
+    }
+    if (onBank && graded.ok && drawUi.bankFor) recordStudy(drawUi.bankFor, true);
     paintDraw();
   });
   document.getElementById("draw-answer")?.addEventListener("click", () => {
@@ -2482,7 +2526,7 @@ function solveView() {
   return solveUpload();
 }
 
-const bankUi = { year: "전체", kind: "전체", seen: "", step: 0, all: false, flash: "" };
+const bankUi = { year: "전체", kind: "전체", seen: "", step: 0, all: false, flash: "", split: 50, zoom: 1 };
 const BANK_KINDS = ["네트워크 공정표", "단축 공정표", "여유시간과 주공정", "여유시간", "주공정선 표시", "일정과 여유시간"];
 const LEVEL_NAME = { 하: "초급", 중: "중급", 상: "고급" };
 
@@ -2508,47 +2552,70 @@ function bankSource(item) {
   return `공정표 문제은행 ${bankNo(item)} · ${kind}`;
 }
 
-function examSheet(item) {
+function examDataTable(item) {
+  if (item.costs) return costTable(item.costs);
+  if (item.jobs.some((job) => job.slope != null)) return gradientTable(item.jobs);
+  return `<table class="cpm-table">
+    <thead><tr><th>작업</th><th>일수</th><th>바로 앞</th></tr></thead>
+    <tbody>${item.jobs
+      .map(
+        (job) =>
+          `<tr><td>${esc(job.name)}</td><td>${job.duration}</td><td>${job.preds.length ? esc(job.preds.join(", ")) : "없음"}</td></tr>`
+      )
+      .join("")}</tbody>
+  </table>`;
+}
+
+function examSplitColumns() {
+  const left = Math.min(78, Math.max(22, Number(bankUi.split) || 50));
+  bankUi.split = left;
+  return `minmax(0, ${left}fr) 18px minmax(0, ${100 - left}fr)`;
+}
+
+function examProblemView(item) {
+  const width = `${Math.round((bankUi.zoom || 1) * 100)}%`;
   if (item.problemImage) {
-    return `
-      <figure class="exam-photo">
-        <img src="${esc(item.problemImage)}" alt="${esc(item.source || item.title)} 문제">
-      </figure>
-      <div class="table-wrap">
-        ${
-          item.costs
-            ? costTable(item.costs)
-            : item.jobs.some((job) => job.slope != null)
-              ? gradientTable(item.jobs)
-              : `<table class="cpm-table">
-          <thead><tr><th>작업</th><th>일수</th><th>바로 앞</th></tr></thead>
-          <tbody>${item.jobs
-            .map(
-              (job) =>
-                `<tr><td>${esc(job.name)}</td><td>${job.duration}</td><td>${job.preds.length ? esc(job.preds.join(", ")) : "없음"}</td></tr>`
-            )
-            .join("")}</tbody>
-        </table>`}
-      </div>
-    `;
+    return `<img class="exam-zoom-target" src="${esc(item.problemImage)}" alt="${esc(item.source || item.title)} 문제" style="width:${width}">`;
   }
+  return `<div class="exam-zoom-target exam-paper" style="width:${width}">
+    <header><span>공정관리 · 주공정법</span><b>${esc(bankNo(item))}</b></header>
+    <p>${esc(item.ask)}</p>
+    <table>
+      <thead><tr><th>작업</th><th>일수</th><th>바로 앞 작업</th></tr></thead>
+      <tbody>${item.jobs
+        .map(
+          (job) =>
+            `<tr><td>${esc(job.name)}</td><td>${job.duration}</td><td>${job.preds.length ? esc(job.preds.join(", ")) : "—"}</td></tr>`
+        )
+        .join("")}</tbody>
+    </table>
+    <footer>${esc(bankSource(item))}</footer>
+  </div>`;
+}
+
+function examSplit(item, stepsHtml) {
+  const photos = answerFigures(item);
   return `
-    <figure class="exam-photo">
-      <div class="exam-paper">
-        <header><span>공정관리 · 주공정법</span><b>${esc(bankNo(item))}</b></header>
-        <p>${esc(item.ask)}</p>
-        <table>
-          <thead><tr><th>작업</th><th>일수</th><th>바로 앞 작업</th></tr></thead>
-          <tbody>${item.jobs
-            .map(
-              (job) =>
-                `<tr><td>${esc(job.name)}</td><td>${job.duration}</td><td>${job.preds.length ? esc(job.preds.join(", ")) : "—"}</td></tr>`
-            )
-            .join("")}</tbody>
-        </table>
-        <footer>${esc(bankSource(item))}</footer>
-      </div>
-    </figure>
+    <div class="exam-split" id="exam-split" style="grid-template-columns:${examSplitColumns()}">
+      <section class="exam-pane exam-pane-problem" aria-label="문제">
+        <div class="exam-zoom-bar">
+          <button type="button" class="btn ghost" id="exam-zoom-out">축소</button>
+          <button type="button" class="btn ghost" id="exam-zoom-label">${Math.round((bankUi.zoom || 1) * 100)}%</button>
+          <button type="button" class="btn ghost" id="exam-zoom-in">확대</button>
+        </div>
+        <div class="exam-zoom" id="exam-zoom" tabindex="0" aria-label="문제 사진. 버튼을 누르거나 휠, 두 손가락으로 확대합니다.">
+          ${examProblemView(item)}
+        </div>
+        <div class="exam-pane-table table-wrap">${examDataTable(item)}</div>
+      </section>
+      <div class="exam-split-bar" id="exam-split-bar" role="separator" aria-orientation="vertical" aria-valuemin="22" aria-valuemax="78" aria-valuenow="${bankUi.split}" tabindex="0" aria-label="문제와 해설 비율"></div>
+      <section class="exam-pane exam-pane-explain" id="exam-explain" aria-label="해설">
+        <h2>해설</h2>
+        ${photos}
+        ${stepsHtml}
+        ${studyBar(item)}
+      </section>
+    </div>
   `;
 }
 
@@ -3258,6 +3325,7 @@ function ensureBankDraw(item) {
   drawUi.checks = [];
   drawUi.ok = false;
   drawUi.showAnswer = false;
+  drawUi.answerZoom = 1;
   drawUi.tableMsg = "";
   drawUi.tableHint = false;
   drawUi.answers = [];
@@ -3283,6 +3351,7 @@ function bankProblem(id) {
     bankUi.step = 0;
     bankUi.all = false;
     bankUi.flash = "";
+    bankUi.zoom = 1;
   }
   ensureBankDraw(item);
   const index = EXAM_BANK.findIndex((entry) => entry.id === item.id);
@@ -3299,18 +3368,16 @@ function bankProblem(id) {
     <div class="kicker">문제은행 · ${LEVEL_NAME[item.level] || item.level} · ${no} / ${String(EXAM_BANK.length).padStart(2, "0")}</div>
     <h1>${no}. ${esc(item.title)}</h1>
     <p class="exam-source">출처 · ${esc(bankSource(item))}</p>
-    ${examSheet(item)}
+    ${examSplit(item, steps)}
     ${
       item.jobs
         ? `<section class="bank-practice">
             <h2>이 문제로 그려 보기</h2>
-            <p class="lead">오른쪽 목록의 작업명, 바로 앞 작업, 일수가 이 기출의 기본값입니다. 결합점과 화살표를 직접 그려 보세요.</p>
+            <p class="lead">오른쪽 목록의 작업명, 바로 앞 작업, 일수가 이 기출의 기본값입니다. 결합점과 화살표를 그린 뒤 공정표 채점으로 화살표와 더미를 확인하세요.</p>
             ${drawView(true)}
           </section>`
         : ""
     }
-    ${steps}
-    ${studyBar(item)}
     <p class="actions">
       <a class="btn prev" href="#/solve/bank">목록</a>
       ${prev ? `<a class="btn prev" href="#/solve/bank/${prev.id}">이전 문제</a>` : ""}
@@ -3367,6 +3434,179 @@ function bindBank() {
   });
   document.getElementById("study-ok")?.addEventListener("click", () => markStudy(true));
   document.getElementById("study-miss")?.addEventListener("click", () => markStudy(false));
+  bindExamSplit();
+  bindExamZoom();
+}
+
+function applyExamSplit(value) {
+  const left = Math.min(78, Math.max(22, Math.round(value)));
+  bankUi.split = left;
+  const split = document.getElementById("exam-split");
+  const bar = document.getElementById("exam-split-bar");
+  if (split) split.style.gridTemplateColumns = `minmax(0, ${left}fr) 18px minmax(0, ${100 - left}fr)`;
+  if (bar) bar.setAttribute("aria-valuenow", String(left));
+}
+
+function bindExamSplit() {
+  const split = document.getElementById("exam-split");
+  const bar = document.getElementById("exam-split-bar");
+  if (!split || !bar) return;
+  const fromPointer = (event) => {
+    const rect = split.getBoundingClientRect();
+    if (!rect.width) return;
+    applyExamSplit(((event.clientX - rect.left) / rect.width) * 100);
+  };
+  bar.addEventListener("pointerdown", (event) => {
+    bar.setPointerCapture(event.pointerId);
+    fromPointer(event);
+  });
+  bar.addEventListener("pointermove", (event) => {
+    if (!bar.hasPointerCapture(event.pointerId)) return;
+    fromPointer(event);
+  });
+  bar.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    applyExamSplit(bankUi.split + (event.key === "ArrowLeft" ? -4 : 4));
+  });
+}
+
+function setAnswerZoom(next) {
+  const zoom = Math.round(Math.min(2.4, Math.max(0.55, next)) * 100) / 100;
+  const prev = drawUi.answerZoom || 1;
+  drawUi.answerZoom = zoom;
+  const svg = document.querySelector("#answer-zoom svg");
+  const base = svg ? Number(svg.getAttribute("data-base")) : 0;
+  if (svg && base) svg.style.width = `${Math.round(base * zoom)}px`;
+  const label = document.getElementById("answer-zoom-label");
+  if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  return { zoom, prev };
+}
+
+function bindAnswerZoom() {
+  const view = document.getElementById("answer-zoom");
+  if (!view) return;
+  document.getElementById("answer-zoom-out")?.addEventListener("click", () => setAnswerZoom((drawUi.answerZoom || 1) / 1.25));
+  document.getElementById("answer-zoom-in")?.addEventListener("click", () => setAnswerZoom((drawUi.answerZoom || 1) * 1.25));
+  document.getElementById("answer-zoom-label")?.addEventListener("click", () => setAnswerZoom(1));
+  view.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      const prev = drawUi.answerZoom || 1;
+      const next = setAnswerZoom(prev * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+      const ratio = next.zoom / next.prev;
+      const rect = view.getBoundingClientRect();
+      const originX = event.clientX - rect.left + view.scrollLeft;
+      const originY = event.clientY - rect.top + view.scrollTop;
+      view.scrollLeft = originX * ratio - (event.clientX - rect.left);
+      view.scrollTop = originY * ratio - (event.clientY - rect.top);
+    },
+    { passive: false }
+  );
+  const points = new Map();
+  let pinch = null;
+  const place = (event) => points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  view.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button")) return;
+    place(event);
+    view.setPointerCapture(event.pointerId);
+    view.classList.toggle("is-panning", points.size === 1);
+    if (points.size === 2) {
+      const [a, b] = [...points.values()];
+      pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, zoom: drawUi.answerZoom || 1 };
+    }
+  });
+  view.addEventListener("pointermove", (event) => {
+    if (!points.has(event.pointerId)) return;
+    const prev = points.get(event.pointerId);
+    place(event);
+    if (points.size >= 2 && pinch) {
+      const [a, b] = [...points.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      setAnswerZoom(pinch.zoom * (dist / pinch.dist));
+      return;
+    }
+    if (points.size === 1) {
+      view.scrollLeft -= event.clientX - prev.x;
+      view.scrollTop -= event.clientY - prev.y;
+    }
+  });
+  const endPoint = (event) => {
+    points.delete(event.pointerId);
+    if (points.size < 2) pinch = null;
+    view.classList.toggle("is-panning", points.size === 1);
+  };
+  view.addEventListener("pointerup", endPoint);
+  view.addEventListener("pointercancel", endPoint);
+}
+
+function setExamZoom(next) {
+  const zoom = Math.round(Math.min(4, Math.max(1, next)) * 100) / 100;
+  bankUi.zoom = zoom;
+  const target = document.querySelector("#exam-zoom .exam-zoom-target");
+  if (target) target.style.width = `${zoom * 100}%`;
+  const label = document.getElementById("exam-zoom-label");
+  if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  return zoom;
+}
+
+function bindExamZoom() {
+  const view = document.getElementById("exam-zoom");
+  if (!view) return;
+  document.getElementById("exam-zoom-out")?.addEventListener("click", () => setExamZoom(bankUi.zoom / 1.25));
+  document.getElementById("exam-zoom-in")?.addEventListener("click", () => setExamZoom(bankUi.zoom * 1.25));
+  document.getElementById("exam-zoom-label")?.addEventListener("click", () => setExamZoom(1));
+  view.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      const prev = bankUi.zoom || 1;
+      const next = setExamZoom(prev * (event.deltaY < 0 ? 1.12 : 1 / 1.12));
+      const ratio = next / prev;
+      const rect = view.getBoundingClientRect();
+      const originX = event.clientX - rect.left + view.scrollLeft;
+      const originY = event.clientY - rect.top + view.scrollTop;
+      view.scrollLeft = originX * ratio - (event.clientX - rect.left);
+      view.scrollTop = originY * ratio - (event.clientY - rect.top);
+    },
+    { passive: false }
+  );
+  const points = new Map();
+  let pinch = null;
+  const place = (event) => points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  view.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button")) return;
+    place(event);
+    view.setPointerCapture(event.pointerId);
+    view.classList.toggle("is-panning", points.size === 1);
+    if (points.size === 2) {
+      const [a, b] = [...points.values()];
+      pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, zoom: bankUi.zoom || 1 };
+    }
+  });
+  view.addEventListener("pointermove", (event) => {
+    if (!points.has(event.pointerId)) return;
+    const prev = points.get(event.pointerId);
+    place(event);
+    if (points.size >= 2 && pinch) {
+      const [a, b] = [...points.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      setExamZoom(pinch.zoom * (dist / pinch.dist));
+      return;
+    }
+    if (points.size === 1) {
+      view.scrollLeft -= event.clientX - prev.x;
+      view.scrollTop -= event.clientY - prev.y;
+    }
+  });
+  const endPoint = (event) => {
+    points.delete(event.pointerId);
+    if (points.size < 2) pinch = null;
+    view.classList.toggle("is-panning", points.size === 1);
+  };
+  view.addEventListener("pointerup", endPoint);
+  view.addEventListener("pointercancel", endPoint);
 }
 
 function loginView() {
@@ -4292,6 +4532,7 @@ function render() {
   else if (a === "cpm" && b === "draw") app.innerHTML = drawView();
   else app.innerHTML = homeView();
   document.body.classList.toggle("page-home", !!app.querySelector(".gate-nav"));
+  document.body.classList.toggle("page-bank", a === "solve" && b === "bank" && !!c);
   navActive();
   paintAccount();
   window.scrollTo(0, 0);
